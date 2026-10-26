@@ -174,27 +174,6 @@ Secrets (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) must be added to the repos
 - **AuditLog** service records critical actions with immutable timestamps.
 - **No sensitive data** is ever returned in error responses; Pino redacts passwords, tokens, and clinical notes.
 
----
-
-## Can you submit this project?
-
-**Yes!** The repository now contains:
-- A complete, runnable backend with real business logic.
-- Production‑ready configuration (environment variables, Dockerfile, CI pipeline).
-- Comprehensive automated tests covering unit, integration, and security aspects.
-- Detailed documentation (this README) and Swagger/OpenAPI docs (`/api/docs`).
-- Proper security hardening and observability.
-
-Before submission, make sure to:
-1. **Replace placeholder secrets** in `.env` with the actual Supabase credentials (already done).
-2. **Verify that all tests pass** on a clean clone (`npm ci && npm run test:all`).
-3. **Update the README** with any project‑specific identifiers (e.g., your Supabase project name) if you share the repo publicly.
-4. **Ensure the repository does not contain any secret values** – they should only exist in the local `.env` and GitHub secret store.
-
-Once those checks are satisfied, the project is ready for evaluation, open‑source release, or deployment to a cloud platform (e.g., Render, Fly.io, or a Kubernetes cluster).
-
----
-
 ## License
 
 MIT License – feel free to modify, extend, and ship the code.
