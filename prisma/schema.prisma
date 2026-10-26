@@ -1,0 +1,379 @@
+// Amrutam Healthcare Platform — Prisma Schema
+// PostgreSQL as sole source of truth
+// Use integer minor currency units (paisa) for monetary amounts
+// All timestamps stored in UTC
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMERATIONS
+// ============================================================
+
+enum UserRole {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+  DELETED
+}
+
+enum DoctorVerificationStatus {
+  PENDING
+  VERIFIED
+  SUSPENDED
+  REJECTED
+}
+
+enum SlotStatus {
+  AVAILABLE
+  BOOKED
+  BLOCKED
+  CANCELLED
+}
+
+enum ConsultationStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentProvider {
+  DEV
+  RAZORPAY
+  STRIPE
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+// ============================================================
+// USERS
+// ============================================================
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique
+  passwordHash      String
+  role              UserRole   @default(PATIENT)
+  status            UserStatus @default(ACTIVE)
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  deletedAt         DateTime?
+
+  // Relations
+  profile           Profile?
+  doctor            Doctor?
+  refreshTokens     RefreshToken[]
+  consultationsAsPatient Consultation[] @relation("PatientConsultations")
+  prescriptionsAsPatient Prescription[] @relation("PatientPrescriptions")
+  paymentsAsPatient Payment[]           @relation("PatientPayments")
+  auditLogs         AuditLog[]          @relation("ActorAuditLogs")
+  passwordResetTokens PasswordResetToken[]
+  idempotencyKeys   IdempotencyKey[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+// ============================================================
+// PROFILES
+// ============================================================
+
+model Profile {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @unique @db.Uuid
+  firstName         String   @db.VarChar(100)
+  lastName          String   @db.VarChar(100)
+  phone             String?  @db.VarChar(20)
+  dateOfBirth       DateTime? @db.Date
+  preferredTimezone String   @default("Asia/Kolkata") @db.VarChar(50)
+  avatarUrl         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+// ============================================================
+// REFRESH TOKENS (hashed, family-tracked)
+// ============================================================
+
+model RefreshToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  tokenHash   String    @unique  // SHA-256 of the raw token
+  familyHash  String    // SHA-256 of the token family root; used for family revocation
+  expiresAt   DateTime
+  usedAt      DateTime?
+  revokedAt   DateTime?
+  revokedReason String?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([familyHash])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// PASSWORD RESET TOKENS
+// ============================================================
+
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  tokenHash   String    @unique  // SHA-256 of the raw token
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_reset_tokens")
+}
+
+// ============================================================
+// DOCTORS
+// ============================================================
+
+model Doctor {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  userId               String                   @unique @db.Uuid
+  licenseNumber        String                   @unique @db.VarChar(100)
+  specialization       String                   @db.VarChar(100)
+  qualifications       String[]
+  biography            String?
+  consultationFeeMinor Int                      // Fee in minor currency units (paisa)
+  currency             String                   @default("INR") @db.VarChar(3)
+  verificationStatus   DoctorVerificationStatus @default(PENDING)
+  verifiedAt           DateTime?
+  verifiedBy           String?                  @db.Uuid  // Admin userId
+  suspensionReason     String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  user                 User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availabilitySlots    AvailabilitySlot[]
+  consultations        Consultation[]           @relation("DoctorConsultations")
+  prescriptions        Prescription[]           @relation("DoctorPrescriptions")
+
+  @@index([specialization])
+  @@index([verificationStatus])
+  @@index([consultationFeeMinor])
+  @@map("doctors")
+}
+
+// ============================================================
+// AVAILABILITY SLOTS
+// ============================================================
+
+model AvailabilitySlot {
+  id          String     @id @default(uuid()) @db.Uuid
+  doctorId    String     @db.Uuid
+  startAt     DateTime
+  endAt       DateTime
+  status      SlotStatus @default(AVAILABLE)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  doctor       Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  consultation Consultation?
+
+  // Prevent overlapping slots at the DB level via unique constraint on doctorId+time
+  // Application layer also validates before insert using SELECT FOR UPDATE
+  @@index([doctorId, startAt])
+  @@index([doctorId, status])
+  @@index([startAt])
+  @@map("availability_slots")
+}
+
+// ============================================================
+// CONSULTATIONS
+// ============================================================
+
+model Consultation {
+  id                 String             @id @default(uuid()) @db.Uuid
+  patientId          String             @db.Uuid
+  doctorId           String             @db.Uuid
+  availabilitySlotId String             @unique @db.Uuid  // One slot → one consultation
+  status             ConsultationStatus @default(PENDING_PAYMENT)
+  reason             String?            @db.VarChar(1000)
+  scheduledStartAt   DateTime
+  scheduledEndAt     DateTime
+  cancellationReason String?
+  cancelledAt        DateTime?
+  completedAt        DateTime?
+  expiresAt          DateTime?          // When PENDING_PAYMENT expires (slot release)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  patient            User               @relation("PatientConsultations", fields: [patientId], references: [id])
+  doctor             Doctor             @relation("DoctorConsultations", fields: [doctorId], references: [id])
+  slot               AvailabilitySlot   @relation(fields: [availabilitySlotId], references: [id])
+  prescriptions      Prescription[]
+  payment            Payment?
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([status])
+  @@index([scheduledStartAt])
+  @@index([expiresAt])
+  @@map("consultations")
+}
+
+// ============================================================
+// PRESCRIPTIONS
+// ============================================================
+
+model Prescription {
+  id              String   @id @default(uuid()) @db.Uuid
+  consultationId  String   @unique @db.Uuid
+  patientId       String   @db.Uuid
+  doctorId        String   @db.Uuid
+  diagnosis       String   @db.VarChar(2000)
+  notes           String?  @db.VarChar(5000)
+  issuedAt        DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  version         Int      @default(1)
+
+  consultation    Consultation @relation(fields: [consultationId], references: [id])
+  patient         User         @relation("PatientPrescriptions", fields: [patientId], references: [id])
+  doctor          Doctor       @relation("DoctorPrescriptions", fields: [doctorId], references: [id])
+  medications     Medication[]
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([consultationId])
+  @@map("prescriptions")
+}
+
+model Medication {
+  id             String  @id @default(uuid()) @db.Uuid
+  prescriptionId String  @db.Uuid
+  name           String  @db.VarChar(200)
+  dosage         String  @db.VarChar(100)
+  frequency      String  @db.VarChar(100)
+  durationDays   Int?
+  instructions   String? @db.VarChar(500)
+
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@map("medications")
+}
+
+// ============================================================
+// PAYMENTS
+// ============================================================
+
+model Payment {
+  id                 String          @id @default(uuid()) @db.Uuid
+  consultationId     String          @unique @db.Uuid
+  patientId          String          @db.Uuid
+  amountMinor        Int             // Amount in minor units (paisa)
+  currency           String          @default("INR") @db.VarChar(3)
+  status             PaymentStatus   @default(PENDING)
+  provider           PaymentProvider @default(DEV)
+  providerReference  String?         // External payment ID
+  idempotencyKeyHash String?         @unique  // SHA-256 of idempotency key
+  failureReasonCode  String?
+  webhookProcessedAt DateTime?
+  paidAt             DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  consultation       Consultation    @relation(fields: [consultationId], references: [id])
+  patient            User            @relation("PatientPayments", fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@index([status])
+  @@index([providerReference])
+  @@map("payments")
+}
+
+// ============================================================
+// IDEMPOTENCY KEYS (persistent, cross-instance safe)
+// ============================================================
+
+model IdempotencyKey {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  operation        String   @db.VarChar(100)  // e.g. "BOOK_CONSULTATION", "INITIATE_PAYMENT"
+  keyHash          String   @db.VarChar(64)   // SHA-256 of raw key
+  requestBodyHash  String   @db.VarChar(64)   // SHA-256 of request body
+  responseBody     String?  // Stored outcome JSON
+  responseStatus   Int?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  completedAt      DateTime?
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, operation, keyHash])
+  @@index([userId, operation])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ============================================================
+// AUDIT LOGS (append-only; no update/delete APIs exposed)
+// ============================================================
+
+model AuditLog {
+  id            String       @id @default(uuid()) @db.Uuid
+  actorUserId   String?      @db.Uuid  // Null for system events
+  action        String       @db.VarChar(100)
+  resourceType  String       @db.VarChar(50)
+  resourceId    String?      @db.VarChar(100)
+  outcome       AuditOutcome @default(SUCCESS)
+  correlationId String?      @db.VarChar(100)
+  ipAddress     String?      @db.VarChar(45)  // IPv4 or IPv6
+  userAgent     String?      @db.VarChar(500)
+  metadata      Json?        // Non-sensitive contextual data
+  createdAt     DateTime     @default(now())
+
+  actor         User?        @relation("ActorAuditLogs", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

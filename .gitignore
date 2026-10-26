@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files (NEVER commit)
+.env
+.env.local
+.env.production
+.env.staging
+
+# Test coverage
+coverage/
+
+# Prisma generated files (regenerate with prisma generate)
+# Keep migrations but ignore generated client cache
+.prisma/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# k6 result files
+k6-results/
+
+# Docker volumes
+postgres-data/

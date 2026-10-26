@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # PostgreSQL database
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: amrutam-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: amrutam_dev
+      POSTGRES_USER: amrutam_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme_dev_only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U amrutam_user -d amrutam_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================================
+  # API service
+  # ============================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: amrutam-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://amrutam_user:${DB_PASSWORD:-changeme_dev_only}@postgres:5432/amrutam_dev
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "require(\"http\").get(\"http://localhost:3000/health/live\", (r) => process.exit(r.statusCode === 200 ? 0 : 1))"']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres-data:
+    name: amrutam-postgres-data
